@@ -39,14 +39,22 @@ const combineHTML = async ({
   }
 
   if (checkExtension) {
-    const EXT = '.html';
-    components = components.filter((c) => path.extname(c) === EXT);
-    if (path.extname(startFile) !== EXT) {
-      throw new Error(`Wrong extension of startFile:${startFile}`);
+    const EXT = '.html',
+      isExt = (p) => path.extname(p) === EXT;
+    if (!isExt(startFile)) {
+      throw new Error(`Wrong extension: ${startFile}. Must be '${EXT}'`);
     }
-    if (path.extname(outputFile) !== EXT) {
-      throw new Error(`Wrong extension of outputFile:${outputFile}}`);
+    if (!isExt(outputFile)) {
+      throw new Error(`Wrong extension: ${outputFile}. Must be '${EXT}'`);
     }
+    let filtered = [];
+    for (const component of components) {
+      const stat = await fs.lstat(component);
+      if (stat.isFile() && isExt(component)) {
+        filtered = [...filtered, component];
+      }
+    }
+    components = [...filtered];
   }
 
   let content;
@@ -59,7 +67,7 @@ const combineHTML = async ({
   }
 
   const marker = { open: '{{', close: '}}' };
-  const chars = '[a-z0-9.]';
+  const chars = `[^${marker.close}]`;
   const matches = content.matchAll(
     new RegExp(`${marker.open}${chars}*${marker.close}`, 'gi')
   );
@@ -81,7 +89,12 @@ const combineHTML = async ({
 
   for (const m of matches) {
     const occurance = m[0];
-    const name = occurance.slice(marker.open.length, -marker.close.length);
+    const inside = occurance.slice(marker.open.length, -marker.close.length);
+    const REGEX = /^ ?[a-z0-9]* ?$/i;
+    if (!REGEX.test(inside)) {
+      throw new Error(`Name does not match regex: ${REGEX}`);
+    }
+    const name = inside.trim();
     const componentPath = components.find((e) => path.parse(e).name === name);
     if (!componentPath) {
       throw new Error(`No such component: ${occurance}`);
@@ -114,11 +127,19 @@ const combineCSS = async ({ outputFile, components = [], checkExtension }) => {
   }
 
   if (checkExtension) {
-    const EXT = '.css';
-    components = components.filter((c) => path.extname(c) === EXT);
-    if (path.extname(outputFile) !== EXT) {
-      throw new Error(`Wrong extension of outputFile:${outputFile}}`);
+    const EXT = '.css',
+      isExt = (p) => path.extname(p) === EXT;
+    if (!isExt(outputFile)) {
+      throw new Error(`Wrong extension: ${outputFile}. Must be '${EXT}'`);
     }
+    let filtered = [];
+    for (const component of components) {
+      const stat = await fs.lstat(component);
+      if (stat.isFile() && isExt(component)) {
+        filtered = [...filtered, component];
+      }
+    }
+    components = [...filtered];
   }
 
   let content = [];
@@ -161,23 +182,41 @@ const deleteIfExists = async (path, rmParams) => {
 (async () => {
   const DIST = 'project-dist';
 
-  await deleteIfExists(path.join(__dirname, DIST), { recursive: true });
+  const HTML_OUTPUT = path.join(__dirname, `${DIST}/index.html`);
+  const ASSETS_OUTPUT = path.join(__dirname, `${DIST}/assets`);
+  const CSS_OUTPUT = path.join(__dirname, `${DIST}/style.css`);
 
-  combineCSS({
-    outputFile: path.join(__dirname, `${DIST}/style.css`),
-    components: path.join(__dirname, 'styles'),
-    checkExtension: true,
-  });
+  try {
+    await combineHTML({
+      startFile: path.join(__dirname, 'template.html'),
+      outputFile: HTML_OUTPUT,
+      components: path.join(__dirname, 'components'),
+      checkExtension: true,
+    });
+  } catch (e) {
+    await deleteIfExists(HTML_OUTPUT);
+    throw new Error(e);
+  }
 
-  combineHTML({
-    startFile: path.join(__dirname, 'template.html'),
-    outputFile: path.join(__dirname, `${DIST}/index.html`),
-    components: path.join(__dirname, 'components'),
-    checkExtension: true,
-  });
+  try {
+    await combineCSS({
+      outputFile: CSS_OUTPUT,
+      components: path.join(__dirname, 'styles'),
+      checkExtension: true,
+    });
+  } catch (e) {
+    await deleteIfExists(CSS_OUTPUT);
+    throw new Error(e);
+  }
 
-  deepDirCopy({
-    from: path.join(__dirname, 'assets'),
-    to: path.join(__dirname, `${DIST}/assets`),
-  });
+  try {
+    await deleteIfExists(ASSETS_OUTPUT, { recursive: true });
+    await deepDirCopy({
+      from: path.join(__dirname, 'assets'),
+      to: ASSETS_OUTPUT,
+    });
+  } catch (e) {
+    await deleteIfExists(ASSETS_OUTPUT);
+    throw new Error(e);
+  }
 })();
